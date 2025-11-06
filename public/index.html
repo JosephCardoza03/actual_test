@@ -77,14 +77,6 @@
     // const deleteBtn = document.getElementById('')
     // const updateBtn = 
 
-    function updateHeaderText() {
-        const todosLength = todos.length
-        const newString = todos.length === 1 ?
-            `You have 1 open task.` :
-            `You have ${todosLength} open tasks.`
-        header.querySelector('h1').innerText = newString
-    }
-
     function updateNavCount() {
         navElements.forEach(ele => {
             const btnText = ele.innerText.split(' ')[0]
@@ -104,17 +96,6 @@
         })
     }
 
-    function changeTab(tab) {
-        selectedTab = tab
-        navElements.forEach(val => {
-            if (val.innerText.includes(tab)) {
-                val.classList.add('selected-tab')
-            } else {
-                val.classList.remove('selected-tab')
-            }
-        })
-        renderTodos()
-    }
 
     // showDashboard()
 
