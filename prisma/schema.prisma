@@ -25,10 +25,10 @@ model Appointment {
 
   startTime     DateTime
   endTime       DateTime
-
+  
   status        AppointmentStatus @default(AVAILABLE)
 
-  googleEventId String?
+  googleEventId String?  @unique  // 🔒 one DB appointment per Google event
 
   patientId     Int?
   patient       User?    @relation(fields: [patientId], references: [id])

@@ -1,3 +1,4 @@
+// src/routes/appointmentRoutes.js
 import express from 'express'
 import { google } from 'googleapis'
 import prisma from '../prismaClient.js'
@@ -16,6 +17,8 @@ let tokensSet = false
 const CAREGIVER_CALENDAR_ID = 'primary' // single caregiver
 
 // ---------- Google login to connect caregiver calendar ----------
+
+// /appointments/login
 router.get('/login', (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -24,6 +27,7 @@ router.get('/login', (req, res) => {
   res.redirect(url)
 })
 
+// /appointments/redirect
 router.get('/redirect', async (req, res) => {
   const code = req.query.code
 
@@ -107,10 +111,18 @@ router.post('/book/:eventId', authMiddleware, async (req, res) => {
       return res.status(400).send('This slot is not available anymore.')
     }
 
-    // 2) Update the event to show it's booked
+    // Get user's "email" (username in your current setup)
+    const userEmail = req.user?.username || 'Unknown user'
+
+    // 2) Update event to show who booked it
     const updatedEvent = {
       ...event,
-      summary: 'BOOKED' // or `BOOKED - patient #${userId}` if you want
+      summary: `BOOKED - ${userEmail}`,
+      description: `Booked via caregiver app by ${userEmail}`,
+      attendees: [
+        ...(event.attendees || []),
+        { email: userEmail }
+      ]
     }
 
     await calendar.events.update({
@@ -119,12 +131,19 @@ router.post('/book/:eventId', authMiddleware, async (req, res) => {
       resource: updatedEvent
     })
 
-    // 3) Create DB row as BOOKED
+    // 3) Upsert the Appointment row in Prisma
     const startIso = event.start.dateTime || event.start.date
     const endIso = event.end.dateTime || event.end.date
 
-    const appointment = await prisma.appointment.create({
-      data: {
+    const appointment = await prisma.appointment.upsert({
+      where: { googleEventId: eventId }, // googleEventId is @unique
+      update: {
+        startTime: new Date(startIso),
+        endTime: new Date(endIso),
+        status: 'BOOKED',
+        patientId: userId
+      },
+      create: {
         startTime: new Date(startIso),
         endTime: new Date(endIso),
         status: 'BOOKED',
@@ -136,6 +155,9 @@ router.post('/book/:eventId', authMiddleware, async (req, res) => {
     res.json(appointment)
   } catch (err) {
     console.error('Error booking appointment:', err)
+    if (err.code === 'P2002') {
+      return res.status(400).send('This slot has already been booked.')
+    }
     res.status(500).send('Failed to book appointment.')
   }
 })
@@ -150,46 +172,65 @@ router.post('/cancel/:eventId', authMiddleware, async (req, res) => {
   const eventId = req.params.eventId
 
   try {
-    const calendar = google.calendar({ version: 'v3', auth: oauth2Client })
-
-    // 1) Load the event
-    const { data: event } = await calendar.events.get({
-      calendarId: CAREGIVER_CALENDAR_ID,
-      eventId
-    })
-
-    if (!event) {
-      return res.status(404).send('Event not found in calendar.')
-    }
-
-    // 2) Change the event back to AVAILABLE
-    const updatedEvent = {
-      ...event,
-      summary: 'AVAILABLE'
-    }
-
-    await calendar.events.update({
-      calendarId: CAREGIVER_CALENDAR_ID,
-      eventId,
-      resource: updatedEvent
-    })
-
-    // 3) Mark user's appointment row as CANCELLED
-    await prisma.appointment.updateMany({
+    // 0) Find this user's booked appointment for that event
+    const existing = await prisma.appointment.findFirst({
       where: {
         googleEventId: eventId,
         patientId: userId,
         status: 'BOOKED'
-      },
-      data: {
-        status: 'CANCELLED'
       }
+    })
+
+    if (!existing) {
+      return res
+        .status(404)
+        .json({ message: 'You do not have an active booking for this event.' })
+    }
+
+    const calendar = google.calendar({ version: 'v3', auth: oauth2Client })
+
+    // 1) Try to load the event from Google
+    let event = null
+    try {
+      const { data } = await calendar.events.get({
+        calendarId: CAREGIVER_CALENDAR_ID,
+        eventId
+      })
+      event = data
+    } catch (err) {
+      if (err.code === 404 || (err.response && err.response.status === 404)) {
+        console.warn(`Google event ${eventId} not found; cancelling in DB only`)
+      } else {
+        throw err
+      }
+    }
+
+    // 2) If event exists, set it back to AVAILABLE
+    if (event) {
+      const updatedEvent = {
+        ...event,
+        summary: 'AVAILABLE'
+      }
+
+      await calendar.events.update({
+        calendarId: CAREGIVER_CALENDAR_ID,
+        eventId,
+        resource: updatedEvent
+      })
+    }
+
+    // 3) Mark this appointment as CANCELLED
+    await prisma.appointment.update({
+      where: { id: existing.id },
+      data: { status: 'CANCELLED' }
     })
 
     res.json({ message: 'Appointment cancelled.' })
   } catch (err) {
     console.error('Error cancelling appointment:', err)
-    res.status(500).send('Failed to cancel appointment.')
+    res
+      .status(500)
+      .json({ message: 'Failed to cancel appointment.', error: err.message })
   }
 })
 
@@ -201,11 +242,14 @@ router.get('/mine', authMiddleware, async (req, res) => {
     const appointments = await prisma.appointment.findMany({
       where: {
         patientId: userId,
-        status: 'BOOKED'   // 👈 ONLY show booked, not cancelled or available
+        status: 'BOOKED',
+        startTime: { gte: new Date() } // only upcoming/current
       },
       orderBy: {
         startTime: 'asc'
       }
+      // If you only want the next one:
+      // take: 1
     })
 
     res.json(appointments)
