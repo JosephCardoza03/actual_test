@@ -1,4 +1,3 @@
-// src/routes/appointmentRoutes.js
 import express from 'express'
 import { google } from 'googleapis'
 import prisma from '../prismaClient.js'
@@ -6,7 +5,7 @@ import authMiddleware from '../middleware/authMiddleware.js'
 
 const router = express.Router()
 
-// ----- Google OAuth2 client -----
+// Google Auth set up
 const oauth2Client = new google.auth.OAuth2(
   process.env.CLIENT_ID,
   process.env.SECRET_ID,
@@ -14,11 +13,9 @@ const oauth2Client = new google.auth.OAuth2(
 )
 
 let tokensSet = false
-const CAREGIVER_CALENDAR_ID = 'primary' // single caregiver
+const CAREGIVER_CALENDAR_ID = 'primary'
 
-// ---------- Google login to connect caregiver calendar ----------
-
-// /appointments/login
+// /appointments/login how our client will update/access out calendar
 router.get('/login', (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -47,9 +44,7 @@ router.get('/redirect', async (req, res) => {
   }
 })
 
-// ---------- PROTECTED ROUTES (patients must be logged in) ----------
-
-// GET /appointments/available
+// check if authorized for calendar
 router.get('/available', authMiddleware, async (req, res) => {
   if (!tokensSet) {
     return res.status(400).send('Google calendar is not authorized yet.')
@@ -72,7 +67,7 @@ router.get('/available', authMiddleware, async (req, res) => {
 
     const events = response.data.items || []
 
-    // ONLY events whose summary contains "AVAILABLE"
+    // calander only shows AVAILABLE things on google calendar
     const available = events.filter(
       (ev) => (ev.summary || '').toUpperCase().includes('AVAILABLE')
     )
@@ -96,7 +91,7 @@ router.post('/book/:eventId', authMiddleware, async (req, res) => {
   try {
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client })
 
-    // 1) Load the event from Google
+    // Load the event from Google
     const { data: event } = await calendar.events.get({
       calendarId: CAREGIVER_CALENDAR_ID,
       eventId
@@ -111,10 +106,10 @@ router.post('/book/:eventId', authMiddleware, async (req, res) => {
       return res.status(400).send('This slot is not available anymore.')
     }
 
-    // Get user's "email" (username in your current setup)
+    // Get user's username
     const userEmail = req.user?.username || 'Unknown user'
 
-    // 2) Update event to show who booked it
+    // update booked events 
     const updatedEvent = {
       ...event,
       summary: `BOOKED - ${userEmail}`,
@@ -131,12 +126,12 @@ router.post('/book/:eventId', authMiddleware, async (req, res) => {
       resource: updatedEvent
     })
 
-    // 3) Upsert the Appointment row in Prisma
+    // store in prisma 
     const startIso = event.start.dateTime || event.start.date
     const endIso = event.end.dateTime || event.end.date
 
     const appointment = await prisma.appointment.upsert({
-      where: { googleEventId: eventId }, // googleEventId is @unique
+      where: { googleEventId: eventId }, 
       update: {
         startTime: new Date(startIso),
         endTime: new Date(endIso),
@@ -162,7 +157,7 @@ router.post('/book/:eventId', authMiddleware, async (req, res) => {
   }
 })
 
-// POST /appointments/cancel/:eventId
+// CANCEL FEATURE
 router.post('/cancel/:eventId', authMiddleware, async (req, res) => {
   if (!tokensSet) {
     return res.status(400).send('Google calendar is not authorized yet.')
@@ -172,7 +167,7 @@ router.post('/cancel/:eventId', authMiddleware, async (req, res) => {
   const eventId = req.params.eventId
 
   try {
-    // 0) Find this user's booked appointment for that event
+    // Search for Appointment in Users table 
     const existing = await prisma.appointment.findFirst({
       where: {
         googleEventId: eventId,
@@ -189,7 +184,7 @@ router.post('/cancel/:eventId', authMiddleware, async (req, res) => {
 
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client })
 
-    // 1) Try to load the event from Google
+    // Load from Google Calendar 
     let event = null
     try {
       const { data } = await calendar.events.get({
@@ -205,7 +200,7 @@ router.post('/cancel/:eventId', authMiddleware, async (req, res) => {
       }
     }
 
-    // 2) If event exists, set it back to AVAILABLE
+    // IF its a real event then lets set it to AVAILABLE again on the google calander 
     if (event) {
       const updatedEvent = {
         ...event,
@@ -219,7 +214,7 @@ router.post('/cancel/:eventId', authMiddleware, async (req, res) => {
       })
     }
 
-    // 3) Mark this appointment as CANCELLED
+    // now store as canelled 
     await prisma.appointment.update({
       where: { id: existing.id },
       data: { status: 'CANCELLED' }
@@ -234,7 +229,7 @@ router.post('/cancel/:eventId', authMiddleware, async (req, res) => {
   }
 })
 
-// GET /appointments/mine
+// SHOW USERS CURR APPOINTMENTS 
 router.get('/mine', authMiddleware, async (req, res) => {
   const userId = req.userId
 
@@ -243,15 +238,12 @@ router.get('/mine', authMiddleware, async (req, res) => {
       where: {
         patientId: userId,
         status: 'BOOKED',
-        startTime: { gte: new Date() } // only upcoming/current
+        startTime: { gte: new Date() } 
       },
       orderBy: {
         startTime: 'asc'
       }
-      // If you only want the next one:
-      // take: 1
     })
-
     res.json(appointments)
   } catch (err) {
     console.error('Error fetching user appointments:', err)

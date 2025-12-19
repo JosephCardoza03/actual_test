@@ -25,8 +25,8 @@ async function authMiddleware(req, res, next) {
     }
 
     // Attach both full user and userId
-    req.user = user          // full user
-    req.userId = user.id     // 👈 this is what routes use
+    req.user = user          
+    req.userId = user.id     
 
     next()
   } catch (err) {
