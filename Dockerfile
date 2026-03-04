@@ -1,22 +1,20 @@
 FROM node:22-alpine
 
-# Set Working Directory
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Copy Prisma schema BEFORE install
+# Copy prisma schema + migrations
 COPY prisma ./prisma
 
-# Install Dependencies (now prisma generate works)
+# Install dependencies
 RUN npm install
 
-# Copy rest of app code
+# Copy rest of app
 COPY . .
 
-# Expose correct port
 EXPOSE 5003
 
-# Run app
-CMD ["node", "./src/server.js"]
+# Run migrations, then start server
+CMD ["sh", "-c", "npx prisma migrate deploy && node ./src/server.js"]
