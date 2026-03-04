@@ -7,8 +7,8 @@
   "scripts": {
     "dev": "node --watch -r dotenv/config ./src/server.js",
     "start": "node ./src/server.js",
-    "build": "prisma generate",
     "postinstall": "prisma generate",
+    "build": "prisma migrate deploy",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
